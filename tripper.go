@@ -23,10 +23,11 @@ var once sync.Once
 
 //TripperResult used for cli output
 type TripperResult struct {
-	DsnLookup  string `json:"dnsLookUp"`
-	DialLookUp string `json:"dialLookUp"`
-	Ttfb       string `json:"ttfb"`
-	Took       string `json:"took"`
+	DsnLookup    string `json:"dnsLookUp"`
+	TCPConnect   string `json:"tcpConnect"`
+	TLSHandshake string `json:"tlsHandshake"`
+	Ttfb         string `json:"ttfb"`
+	Took         string `json:"took"`
 }
 
 //Tripper struct used to define a new type which will be
@@ -45,12 +46,14 @@ type Tripper struct {
 	Dial struct {
 		Start         string `json:"start"`
 		timeStart     time.Time
+		timeEnd       time.Time
 		End           string `json:"end"`
 		TotalTime     string `json:"totalTime"`
 		timeTotalTime int64
 	} `json:"dial"`
 	Connection struct {
-		Time string `json:"time"`
+		Time    string `json:"time"`
+		timeCon int64
 	} `json:"connection"`
 	WroteAllRequestHeaders struct {
 		Time string `json:"time"`
@@ -65,28 +68,46 @@ type Tripper struct {
 	} `json:"first_received_response_byte"`
 }
 
+var (
+	// Command line flags.
+	wordPtr string
+	boolPtr bool
+	debug   bool
+)
+
 //silent log messages
 func init() {
-	log.SetOutput(ioutil.Discard)
+	//Parse flag parameters
+	flag.StringVar(&wordPtr, "url", "https://www.google.com", "a url")
+	flag.BoolVar(&boolPtr, "json", false, "if set, output a json result")
+	flag.BoolVar(&debug, "debug", false, "set debug to true, and print out logs")
+
+	flag.Usage = usage
+	flag.Parse()
+
+	if debug != true {
+		log.SetOutput(ioutil.Discard)
+	}
+}
+
+func usage() {
+	fmt.Fprintf(os.Stderr, "Usage: %s [OPTIONS] URL\n\n", os.Args[0])
+	fmt.Fprintln(os.Stderr, "OPTIONS:")
+	flag.PrintDefaults()
 }
 
 func main() {
 	start := time.Now()
 	//number of goroutines
-	gr := 5
+	gr := 150
 	c := make(chan *Tripper, gr)
 
-	//Parse flag parameters
-	wordPtr := flag.String("url", "https://www.google.com", "a url")
-	boolPtr := flag.Bool("json", false, "a bool")
-	flag.Parse()
-
 	for i := 0; i < int(gr); i++ {
-		go makeRequest(*wordPtr, c)
+		go makeRequest(wordPtr, c)
 	}
 
 	i := 1
-	var dnsAvgR, dialAvgR, ttfb int64
+	var dnsAvgR, dialAvgR, tlsAvg, ttfb int64
 	for v := range c {
 		if i == int(gr) {
 			once.Do(func() {
@@ -96,17 +117,19 @@ func main() {
 
 		dnsAvgR = dnsAvgR + v.DNS.timeTotalTime
 		dialAvgR = dialAvgR + v.Dial.timeTotalTime
+		tlsAvg = tlsAvg + v.Connection.timeCon
 		ttfb = ttfb + v.FirstReceivedResponseByte.timeTotalTime
 		i++
 	}
 
 	tJSON := TripperResult{}
 	tJSON.DsnLookup = (time.Duration(dnsAvgR/int64(i)) * time.Nanosecond).String()
-	tJSON.DialLookUp = (time.Duration(dialAvgR/int64(i)) * time.Nanosecond).String()
+	tJSON.TCPConnect = (time.Duration(dialAvgR/int64(i)) * time.Nanosecond).String()
 	tJSON.Ttfb = (time.Duration(ttfb/int64(i)) * time.Nanosecond).String()
+	tJSON.TLSHandshake = (time.Duration(tlsAvg/int64(i)) * time.Nanosecond).String()
 	tJSON.Took = (time.Since(start)).String()
 
-	printResult(tJSON, *boolPtr, *wordPtr)
+	printResult(tJSON, boolPtr, wordPtr)
 }
 
 func printResult(tr TripperResult, jsonOutput bool, wordPtr string) {
@@ -115,8 +138,9 @@ func printResult(tr TripperResult, jsonOutput bool, wordPtr string) {
 		fmt.Println()
 		fmt.Printf("%s \t %s\r\n", color.GreenString("Check connection data for : "), color.YellowString(wordPtr))
 		fmt.Println()
-		fmt.Printf("%s \t %s\r\n", "DNS  lookup", tr.DsnLookup)
-		fmt.Printf("%s \t %s\r\n", "Dial lookup", tr.DialLookUp)
+		fmt.Printf("%s \t %s\r\n", "DNS lookup    ", tr.DsnLookup)
+		fmt.Printf("%s \t %s\r\n", "TCP connection", tr.TCPConnect)
+		fmt.Printf("%s \t %s\r\n", "TLS handshake ", tr.TLSHandshake)
 		fmt.Printf("%s \t %s\r\n", "ttfb       ", tr.Ttfb)
 
 		fmt.Printf("\r\nTripper took \t%s\r\n", color.MagentaString(tr.Took))
@@ -200,14 +224,16 @@ func trace() (*httptrace.ClientTrace, *Tripper) {
 			t := time.Now()
 			log.Println(t.UTC().String(), "dial end")
 			d.Dial.End = t.UTC().String()
+			d.Dial.timeEnd = t
 			d.Dial.TotalTime = time.Since(d.Dial.timeStart).String()
 			d.Dial.timeTotalTime = int64(time.Since(d.Dial.timeStart))
 
 		},
 		GotConn: func(connInfo httptrace.GotConnInfo) {
-			t := time.Now().UTC().String()
+			t := time.Now()
 			log.Println(t, "conn time")
-			d.Connection.Time = t
+			d.Connection.Time = t.UTC().String()
+			d.Connection.timeCon = int64(t.Sub(d.Dial.timeEnd))
 		},
 		WroteHeaders: func() {
 			t := time.Now().UTC().String()
