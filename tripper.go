@@ -66,6 +66,7 @@ type Tripper struct {
 		timeTotalTime           int64
 		Time                    string `json:"time"`
 	} `json:"first_received_response_byte"`
+	m sync.Mutex
 }
 
 var (
@@ -199,12 +200,15 @@ func trace() (*httptrace.ClientTrace, *Tripper) {
 	t := &httptrace.ClientTrace{
 
 		DNSStart: func(info httptrace.DNSStartInfo) {
+			d.m.Lock()
 			d.DNS.timeStart = time.Now()
 			log.Println(d.DNS.timeStart.UTC().String(), "dns start")
 			d.DNS.Start = d.DNS.timeStart.UTC().String()
 			d.DNS.Host = info.Host
+			d.m.Unlock()
 		},
 		DNSDone: func(info httptrace.DNSDoneInfo) {
+			d.m.Lock()
 			t := time.Now()
 			log.Println(t, "dns end")
 
@@ -213,44 +217,57 @@ func trace() (*httptrace.ClientTrace, *Tripper) {
 			d.DNS.timeTotalTime = int64(time.Since(d.DNS.timeStart))
 			d.DNS.Address = info.Addrs
 			d.DNS.Error = info.Err
+			d.m.Unlock()
 		},
 		ConnectStart: func(network, addr string) {
+			d.m.Lock()
 			d.Dial.timeStart = time.Now()
 			t := d.Dial.timeStart.UTC().String()
 			log.Println(t, "dial start")
 			d.Dial.Start = t
+			d.m.Unlock()
 		},
 		ConnectDone: func(network, addr string, err error) {
+			d.m.Lock()
 			t := time.Now()
 			log.Println(t.UTC().String(), "dial end")
 			d.Dial.End = t.UTC().String()
 			d.Dial.timeEnd = t
 			d.Dial.TotalTime = time.Since(d.Dial.timeStart).String()
 			d.Dial.timeTotalTime = int64(time.Since(d.Dial.timeStart))
+			d.m.Unlock()
 
 		},
 		GotConn: func(connInfo httptrace.GotConnInfo) {
+			d.m.Lock()
 			t := time.Now()
 			log.Println(t, "conn time")
 			d.Connection.Time = t.UTC().String()
 			d.Connection.timeCon = int64(t.Sub(d.Dial.timeEnd))
+			d.m.Unlock()
 		},
 		WroteHeaders: func() {
+			d.m.Lock()
 			t := time.Now().UTC().String()
 			log.Println(t, "wrote all request headers")
 			d.WroteAllRequestHeaders.Time = t
+			d.m.Unlock()
 		},
 		WroteRequest: func(wr httptrace.WroteRequestInfo) {
+			d.m.Lock()
 			t := time.Now().UTC().String()
 			log.Println(t, "wrote all request")
 			d.WroteAllRequest.Time = t
+			d.m.Unlock()
 		},
 		GotFirstResponseByte: func() {
+			d.m.Lock()
 			t := time.Now()
 			log.Println(t.UTC().String(), "first received response byte")
 			d.FirstReceivedResponseByte.TimeToFirstByteResponse = time.Since(d.Dial.timeStart).String()
 			d.FirstReceivedResponseByte.timeTotalTime = int64(time.Since(d.Dial.timeStart))
 			d.FirstReceivedResponseByte.Time = t.UTC().String()
+			d.m.Unlock()
 		},
 	}
 
